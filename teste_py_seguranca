@@ -1,13 +1,18 @@
 import sqlite3
 import os
 import subprocess
-from flask import Flask, request, make_response
+import shlex
+from flask import Flask, request, make_response, escape
+
 app = Flask(__name__)
+
 def autenticar_usuario(username, password):
+    """Autentifica usuário usando consultas parametrizadas (seguro contra SQL Injection)"""
     conn = sqlite3.connect('usuarios.db')
     cursor = conn.cursor()
-    query = f"SELECT * FROM users WHERE username = '{username}' AND password '{password}'"
-    cursor.execute(query)
+    # Usar ? para parametrização - evita SQL Injection
+    query = "SELECT * FROM users WHERE username = ? AND password = ?"
+    cursor.execute(query, (username, password))
     result = cursor.fetchone()
     conn.close()
     return result is not None
@@ -15,22 +20,42 @@ def autenticar_usuario(username, password):
 
 @app.route("/ping")
 def ping():
+    """Endpoint de ping com validação de entrada segura contra Command Injection"""
     ip = request.args.get("ip", "")
-    output = subprocess.getoutput(f"ping -c 1 {ip}")
-    return f"<pre>{output}</pre>"
+    
+    # Validar que o IP contém apenas caracteres permitidos
+    import re
+    if not re.match(r'^[0-9a-zA-Z\.\:]+$', ip):
+        return "<pre>Erro: IP inválido</pre>", 400
+    
+    # Usar shlex.quote para escapar argumentos com segurança
+    try:
+        output = subprocess.getoutput(f"ping -c 1 {shlex.quote(ip)}")
+        return f"<pre>{escape(output)}</pre>"
+    except Exception as e:
+        return f"<pre>Erro ao executar ping: {escape(str(e))}</pre>", 500
 
 
 @app.route("/debug")
 def debug():
-    return f"SECRET_KEY={os.environ.get('SECRET_KEY')}"
+    """NÃO expor informações sensíveis como SECRET_KEY"""
+    # Se necessário debug, retornar apenas informações não-sensíveis
+    return "Debug endpoint - informações sensíveis não são expostas", 200
 
 
 @app.route("/comente")
 def comente():
+    """Endpoint de comentários com proteção contra XSS"""
     comentario = request.args.get("comentario", "")
-    return f"<h1>Comentário recebido:</h1><p>{comentario}</p>"
+    
+    # Escapar HTML para evitar XSS
+    comentario_seguro = escape(comentario)
+    
+    return f"<h1>Comentário recebido:</h1><p>{comentario_seguro}</p>"
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
-
+    # NUNCA usar debug=True em produção
+    # Usar variável de ambiente para controlar
+    debug_mode = os.environ.get('FLASK_DEBUG', 'False') == 'True'
+    app.run(debug=debug_mode)
